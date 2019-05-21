@@ -11,6 +11,7 @@ import com.github.javaparser.ast.expr.NameExpr;
 import com.github.javaparser.ast.stmt.*;
 import com.github.javaparser.ast.type.ClassOrInterfaceType;
 import com.github.javaparser.ast.type.VoidType;
+import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 import org.apache.commons.io.IOUtils;
 
 import java.io.File;
@@ -19,6 +20,7 @@ import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.logging.Logger;
 
 public class FileWalker {
 
@@ -26,79 +28,54 @@ public class FileWalker {
     private List<ReturnStmt> returnStmts = new ArrayList<>();
     private List<MethodDeclaration> methodDeclaration = new ArrayList<>();
     private List<FieldDeclaration> fieldsDeclaration = new ArrayList<>();
-
-
     private List<MethodCallExpr> methodCallExprs = new ArrayList<>();
-
-
     private CompilationUnit compilationUnit;
     private NameExpr loggerExpression;
-
     private boolean isProcessable = false;
 
 
     public FileWalker(File file) throws FileNotFoundException {
-
         this.compilationUnit = StaticJavaParser.parse(file);
+
         this.file = file;
         walk();
     }
 
 
-
     private FileWalker walk() {
-
         final NodeList<TypeDeclaration<?>> compilationUnitTypes = this.compilationUnit.getTypes();
         processType(compilationUnitTypes.get(0));
         return this;
     }
 
-
-
-
-
     private void processType(TypeDeclaration<?> typeDeclaration) {
-
         if(!(typeDeclaration instanceof ClassOrInterfaceDeclaration)){
             return;
         }
-
         if(typeDeclaration.getModifiers().contains(Modifier.abstractModifier())){
             return;
         }
-
         if((((ClassOrInterfaceDeclaration) typeDeclaration).isInterface() )){
             return;
         }
-
         isProcessable = true;
-
         final List<MethodDeclaration> methods = typeDeclaration.getMethods();
         methods.stream().forEach(this::processMethod);
-
         fieldsDeclaration = typeDeclaration.getFields();
-
-
     }
 
     private void processMethod(MethodDeclaration methodDeclaration) {
-
         if(methodDeclaration.isPublic() ){
-
                 if(!(methodDeclaration.getName().getIdentifier().startsWith("set") || methodDeclaration.getName().getIdentifier().startsWith("get"))) {
                     this.methodDeclaration.add(methodDeclaration);
                     processStatement(methodDeclaration.getBody().get());
                 }
         }
-
     }
 
     public boolean isLoggerAvailable(){
         boolean flag = false;
-
-
         for (FieldDeclaration fieldDeclaration : fieldsDeclaration) {
-
             if(fieldDeclaration.getVariables().size()==1){
                 final VariableDeclarator variableDeclarator = fieldDeclaration.getVariables().get(0);
                 final String variableString = variableDeclarator.getNameAsString();
@@ -158,13 +135,14 @@ public class FileWalker {
             if(methodDecl.getType() instanceof VoidType){
                 final IfStmt exitLogCondition = Utility.createExitLogCondition(loggerExpression, methodDecl,Optional.empty());
                 final NodeList<Statement> statements = methodDecl.getBody().get().getStatements();
-                statements.addLast(exitLogCondition);
+                final Statement statement = statements.get(statements.size() - 1);
+                if(statement.toString().indexOf("debug")<0){
+                    statements.addLast(exitLogCondition);
+                }
             }
-
         } // all void exit methods added
 
         for (ReturnStmt returnStmt : returnStmts) {
-
             final Node node = returnStmt.getParentNode().get();
             if(node instanceof BlockStmt){
                 final BlockStmt block = (BlockStmt) node;
@@ -173,27 +151,21 @@ public class FileWalker {
                     method = method.getParentNode().get();
                 }
                 final IfStmt exitLogCondition = Utility.createExitLogCondition(loggerExpression, (MethodDeclaration)method , returnStmt.getExpression());
-
                 final int size = block.getStatements().size()-1;
-                block.addStatement(size,exitLogCondition);
+                final Statement statement = block.getStatements().get(block.getStatements().size() - 2);
+
+                if(statement.toString().indexOf("debug")<0){
+                    block.addStatement(size,exitLogCondition);
+                }
             }
-
-
-
         }
-
     }
 
 
 
     public int countOfLogging(){
-
         int count = 0;
-
         for (MethodCallExpr methodCallExpr : methodCallExprs) {
-
-
-
             if(methodCallExpr.getScope().isPresent()){
                 final Expression expression = methodCallExpr.getScope().get();
                 if(expression instanceof NameExpr){
@@ -204,13 +176,8 @@ public class FileWalker {
                     }
                 }
             }
-
-
         }
-
-
         return count;
-
     }
 
 
@@ -221,13 +188,12 @@ public class FileWalker {
 
 
         final TypeDeclaration<?> typeDeclaration = compilationUnit.getTypes().get(0);
-        MethodCallExpr methodExpr = new MethodCallExpr(new NameExpr("Logger") , "getLogger");
-        final ClassExpr classExpr = new ClassExpr();
-        classExpr.setType(new ClassOrInterfaceType(typeDeclaration.getNameAsString()));
-        methodExpr.addArgument(classExpr);
+        final BodyDeclaration<?> bodyDeclaration = StaticJavaParser.parseBodyDeclaration("private static final Logger LOGGER = Logger.getLogger(" + typeDeclaration.getNameAsString() + ".class);");
 
-        typeDeclaration.addFieldWithInitializer("Logger" , "LOGGER" , methodExpr , Modifier.Keyword.PRIVATE , Modifier.Keyword.STATIC , Modifier.Keyword.FINAL );
+        typeDeclaration.getMembers().addFirst(bodyDeclaration);
         loggerExpression =  new NameExpr("LOGGER");
+
+
 
     }
 
@@ -237,16 +203,10 @@ public class FileWalker {
     }
 
     public void print() {
-
-
-
-        try(FileOutputStream fos =new FileOutputStream(file)){
-
-        IOUtils.write(compilationUnit.toString() , fos , "UTF-8");
-    }catch(Exception ex){
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            IOUtils.write(compilationUnit.toString(), fos, "UTF-8");
+        } catch (Exception ex) {
             ex.printStackTrace();
         }
     }
-
-
 }
